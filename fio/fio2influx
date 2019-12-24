@@ -1,0 +1,194 @@
+#!/usr/bin/env python
+from __future__ import print_function
+
+"""
+Parse fio JSON logs and prepare as influxdb line protocol
+
+The intent is to take fio json output and publish thusly:
+   fio --output=fio-results.json --output-format=json ...
+   fio2influx fio-results.json | nc influx-telegraf-host port
+
+Copyright 2015-2019 Richard Elling <Richard.Elling@RichardElling.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""
+import sys
+from json import loads
+from argparse import ArgumentParser
+from copy import copy
+
+
+def parse_options(args_list):
+    """
+    parse command line options
+
+    :param args_list: arguments passed as list (eg sys.argv[1:])
+    :type args_list: list
+    :return: options
+    :rtype: optargs
+    """
+    parser = ArgumentParser(
+        description='Parse fio json logs for read results'
+    )
+    parser.add_argument('--measurement', default='fio', type=str,
+                        help='measurement name (default=fio)')
+    parser.add_argument('--tags', default=None, type=str,
+                        help='tags in the form tag=value[,tag=value]')
+    parser.add_argument('filenames', type=str, nargs='+',
+                        help='fio JSON output file(s) to parse')
+    return parser.parse_args(args_list)
+
+
+def escape_chars(s):
+    """
+    escape characters for influxdb line protocol
+    
+    :param s: string to be escaped
+    :type s: str
+    :return: escaped string
+    :rtype: str
+    """
+    return str(s).replace('"', r'\"').replace(',', r'\,').replace('=', r'\=').replace(' ', r'\ ')
+
+
+def get_basic_tags(d):
+    """
+    get the basic tag information
+
+    :param d: dict containing client stat or job info
+    :type d: dict
+    :return: common tags
+    :rtype: list
+    """
+    res = ['jobname={}'.format(escape_chars(d.get('jobname', 'unknown')))]
+    # job hostname is handled as a tag
+    if 'hostname' in d:
+        res.append('job_hostname={}'.format(escape_chars(d.get('hostname', 'unknown'))))
+    return res
+
+
+def get_interesting_fields(d):
+    """
+    Get interesting fields from a report dict
+
+    fio-reported CPU usage is sometimes useful, but better detail is available in the standard
+    CPU agents, such as telegraf's CPU plugin
+
+    For reads and writes:
+      io_bytes   number of bytes transferred
+      bw         bandwidth
+      iops       I/O operations per second
+      runtime    total duration of test
+
+    todo: iodepth and latency histograms
+
+    :param d: dictionary of results for a fio run
+    :type d: dict
+    :return: list of
+    :rtype list:
+    """
+    res = []
+    for i in ['usr_cpu', 'sys_cpu']:
+        if i in d:
+            res.append('{}={}'.format(i, escape_chars(d.get(i, 'parse_error'))))
+
+    for i in ['read', 'write']:
+        if i not in d:
+            continue
+        for j in ['io_bytes', 'bw', 'iops', 'runtime']:
+            if j in d[i]:
+                res.append('{}.{}={}'.format(i, j, escape_chars(d[i].get(j, ''))))
+    return res
+
+
+def print_result(measurement, tags, fields, timestamp):
+    """
+    if results were found, print them in influxdb line protocol format
+
+    :param measurement: influxdb measurement
+    :type measurement: str
+    :param tags: descriptive tags
+    :type tags: list
+    :param fields: fields parsed from fio output
+    :type fields: list
+    :param timestamp: fio reported timestamp (epoch seconds)
+    :type timestamp: str
+    """
+    if fields:
+        print('{},{} {} {}000000000'.format(
+            measurement,
+            ','.join(sorted(tags)),
+            ','.join(sorted(fields)),
+            timestamp
+        ))
+
+
+def main():
+    options = parse_options(sys.argv[1:])
+    option_tags = []
+    if options.tags:
+        for i in options.tags.split(','):
+            if '=' in i:
+                option_tags.append(i)
+
+    for filename in options.filenames:
+        tags = copy(option_tags)
+        tags.append('filename={}'.format(escape_chars(filename)))
+
+        # noinspection PyUnusedLocal
+        j = {}
+        try:
+            with open(filename, 'r') as f:
+                s = f.read()
+                j = loads(s[s.index('{\n'):])
+        except Exception as exc:
+            print('error: cannot parse json from file {}: {}'.format(filename, exc))
+            continue
+
+        if 'timestamp' not in j:
+            continue
+        timestamp = escape_chars(str(j.get('timestamp', '')))
+
+        # interesting tags
+        if 'global options' in j:
+            for i in ['numjobs', 'rw', 'name', 'size', 'bs', 'iodepth', 'ioengine']:
+                if i in j['global options']:
+                    tags.append(
+                        '{}={}'.format(i, escape_chars(j['global options'][i])))
+
+        if 'client_stats' in j:
+            for c in j['client_stats']:
+                client_tags = copy(tags) + get_basic_tags(c)
+                fields = get_interesting_fields(c)
+                print_result(options.measurement, client_tags, fields, timestamp)
+
+        if 'jobs' in j:
+            for c in j['jobs']:
+                client_tags = copy(tags) + get_basic_tags(c)
+                if 'job options' in c:
+                    for i in ['cpus_allowed', 'filename']:
+                        if i in c['job options']:
+                            client_tags.append('{}={}'.format(i, escape_chars(
+                                c['job options'].get(i, 'internal_error')
+                            )))
+                fields = get_interesting_fields(c)
+                print_result(options.measurement, client_tags, fields, timestamp)
+
+
+if __name__ == '__main__':
+    main()
