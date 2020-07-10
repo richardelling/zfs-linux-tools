@@ -583,7 +583,7 @@ def cache_analysis(kstats, cache_name, hits_key, misses_key, consider):
             pr_analysis('{} cache hit rate > {:.0f}%'.format(
                 cache_name, CACHE_RATIO_OK * 100), status='ok')
         else:
-            pr_analysis('{} cache hit rate < {:.0f}%, consider'.format(
+            pr_analysis('{} cache hit rate < {:.0f}%, consider {}'.format(
                 cache_name, CACHE_RATIO_OK * 100, consider), status='info')
 
 
