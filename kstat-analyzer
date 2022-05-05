@@ -595,14 +595,14 @@ def s_int(value, fmt='%d', scale=1):
 
     :param value: value
     :type value: int
-    :param fmt: format string using locale.format() rules
+    :param fmt: format string using locale.format_string() rules
     :type fmt: str
     :param scale: value is divided by scale
     :type scale: int
     :return:
     """
     if float(scale) == 0: scale = 1
-    return locale.format(fmt, int(value) / int(scale), grouping=True)
+    return locale.format_string(fmt, int(value) / int(scale), grouping=True)
 
 
 def s_float(value, fmt='%.1f', scale=1):
@@ -611,14 +611,14 @@ def s_float(value, fmt='%.1f', scale=1):
 
     :param value: value
     :type value: float
-    :param fmt: format string using locale.format() rules
+    :param fmt: format string using locale.format_string() rules
     :type fmt: str
     :param scale: value is divided by scale
     :type scale: float
     :return:
     """
     if float(scale) == 0: scale = 1
-    return locale.format(fmt, float(value) / float(scale), grouping=True)
+    return locale.format_string(fmt, float(value) / float(scale), grouping=True)
 
 
 def s_pct(value, fmt='%.0f', scale=1, parens=True, of=None):
@@ -636,7 +636,7 @@ def s_pct(value, fmt='%.0f', scale=1, parens=True, of=None):
     :return:
     """
     if float(scale) == 0.0: scale = 1
-    s = locale.format(fmt, 100 * float(value) / float(scale),
+    s = locale.format_string(fmt, 100 * float(value) / float(scale),
                       grouping=True) + '%'
     if of:
         s += ' of ' + of
